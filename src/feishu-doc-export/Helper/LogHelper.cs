@@ -35,7 +35,7 @@ namespace feishu_doc_export.Helper
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"【WARN】{message} （请按任意键退出！）");
             Console.ResetColor();
-            Console.ReadKey();
+            WaitForExitKeyIfPossible();
             Environment.Exit(0);
         }
 
@@ -44,7 +44,7 @@ namespace feishu_doc_export.Helper
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"【ERROR】{message}（请按任意键退出！）");
             Console.ResetColor();
-            Console.ReadKey();
+            WaitForExitKeyIfPossible();
             Environment.Exit(0);
         }
 
@@ -60,6 +60,22 @@ namespace feishu_doc_export.Helper
             Console.ForegroundColor = ConsoleColor.DarkRed;
             Console.WriteLine($"【FATAL】{message}");
             Console.ResetColor();
+        }
+
+        private static void WaitForExitKeyIfPossible()
+        {
+            if (Console.IsInputRedirected)
+            {
+                return;
+            }
+
+            try
+            {
+                Console.ReadKey();
+            }
+            catch
+            {
+            }
         }
     }
 }

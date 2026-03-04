@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -25,11 +26,33 @@ namespace feishu_doc_export.HttpApi
         Task<PagedResult<WikiNodeItemDto>> GetWikiNodeList(string spaceId, string pageToken = null, string parentNodeToken = null);
 
         /// <summary>
+        /// 获取文档块列表
+        /// </summary>
+        /// <param name="documentId"></param>
+        /// <param name="pageToken"></param>
+        /// <returns></returns>
+        Task<PagedResult<DocxBlockItemDto>> GetDocxBlocks(string documentId, string pageToken = null);
+
+        /// <summary>
         /// 获取知识空间下全部文档节点
         /// </summary>
         /// <param name="spaceId"></param>
         /// <returns></returns>
         Task<List<WikiNodeItemDto>> GetAllWikiNode(string spaceId);
+
+        /// <summary>
+        /// 根据token获取节点信息
+        /// </summary>
+        /// <param name="token"></param>
+        /// <returns></returns>
+        Task<WikiNodeItemDto> GetWikiNodeInfo(string token);
+
+        /// <summary>
+        /// 根据根节点token递归获取整棵子树
+        /// </summary>
+        /// <param name="rootToken"></param>
+        /// <returns></returns>
+        Task<List<WikiNodeItemDto>> GetWikiSubTreeByToken(string rootToken);
 
         /// <summary>
         /// 递归获取知识空间下指定节点下的所有子节点（包括孙节点）
@@ -85,6 +108,27 @@ namespace feishu_doc_export.HttpApi
         /// <param name="fileToken"></param>
         /// <returns></returns>
         Task<byte[]> DownLoadFile(string fileToken);
+
+        /// <summary>
+        /// 下载文件（静默，不打印错误日志）
+        /// </summary>
+        /// <param name="fileToken"></param>
+        /// <returns></returns>
+        Task<byte[]> DownLoadFileSilently(string fileToken);
+
+        /// <summary>
+        /// 下载媒体文件（静默，不打印错误日志）
+        /// </summary>
+        /// <param name="fileToken"></param>
+        /// <returns></returns>
+        Task<byte[]> DownLoadMediaSilently(string fileToken);
+
+        /// <summary>
+        /// 下载附件（优先files接口，403/404时自动回退media接口）
+        /// </summary>
+        /// <param name="fileToken"></param>
+        /// <returns></returns>
+        Task<byte[]> DownLoadAttachmentBestEffort(string fileToken);
         #endregion
 
         #region 个人空间云文档
@@ -94,6 +138,13 @@ namespace feishu_doc_export.HttpApi
         /// <param name="folderToken"></param>
         /// <returns></returns>
         Task<CloudDocFolderMeta> GetFolderMeta(string folderToken);
+
+        /// <summary>
+        /// 获取云文档节点详情
+        /// </summary>
+        /// <param name="fileToken"></param>
+        /// <returns></returns>
+        Task<CloudDocDto> GetCloudDocMeta(string fileToken);
         /// <summary>
         /// 获取个人空间云文档
         /// </summary>
@@ -110,6 +161,14 @@ namespace feishu_doc_export.HttpApi
         Task<List<CloudDocDto>> GetFolderAllCloudDoc(string folderToken);
 
         /// <summary>
+        /// 获取指定节点及全部后代
+        /// </summary>
+        /// <param name="rootToken"></param>
+        /// <param name="includeRoot"></param>
+        /// <returns></returns>
+        Task<List<CloudDocDto>> GetCloudDocTree(string rootToken, bool includeRoot = true);
+
+        /// <summary>
         /// 递归获取子文档
         /// </summary>
         /// <param name="parentNodeToken"></param>
@@ -120,17 +179,23 @@ namespace feishu_doc_export.HttpApi
     public class FeiShuHttpApiCaller : IFeiShuHttpApiCaller
     {
         private readonly IFeiShuHttpApi _feiShuHttpApi;
+        private static string OpenApiHost => FeiShuConsts.GetOpenApiEndPoint(GlobalConfig.Platform);
 
         public FeiShuHttpApiCaller(IFeiShuHttpApi feiShuHttpApi)
         {
             _feiShuHttpApi = feiShuHttpApi;
         }
 
+        private static string BuildOpenApiUrl(string relativePath)
+        {
+            return FeiShuConsts.BuildOpenApiUrl(relativePath, GlobalConfig.Platform);
+        }
+
         #region 获取知识库所有的文档节点
 
         public async Task<PagedResult<WikiNodeItemDto>> GetWikiNodeList(string spaceId, string pageToken = null, string parentNodeToken = null)
         {
-            StringBuilder urlBuilder = new StringBuilder($"{FeiShuConsts.OpenApiEndPoint}/open-apis/wiki/v2/spaces/{spaceId}/nodes?page_size=50");// page_size=50
+            StringBuilder urlBuilder = new StringBuilder($"{OpenApiHost}/open-apis/wiki/v2/spaces/{spaceId}/nodes?page_size=50");// page_size=50
             if (!string.IsNullOrWhiteSpace(pageToken))
             {
                 urlBuilder.Append($"&page_token={pageToken}");
@@ -143,6 +208,18 @@ namespace feishu_doc_export.HttpApi
 
             var resultData = await _feiShuHttpApi.GetWikeNodeList(urlBuilder.ToString());
 
+            return resultData.Data;
+        }
+
+        public async Task<PagedResult<DocxBlockItemDto>> GetDocxBlocks(string documentId, string pageToken = null)
+        {
+            StringBuilder urlBuilder = new StringBuilder($"{OpenApiHost}/open-apis/docx/v1/documents/{documentId}/blocks?page_size=50");
+            if (!string.IsNullOrWhiteSpace(pageToken))
+            {
+                urlBuilder.Append($"&page_token={pageToken}");
+            }
+
+            var resultData = await _feiShuHttpApi.GetDocxBlocks(urlBuilder.ToString());
             return resultData.Data;
         }
 
@@ -193,6 +270,85 @@ namespace feishu_doc_export.HttpApi
             }
         }
 
+        public async Task<WikiNodeItemDto> GetWikiNodeInfo(string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return null;
+            }
+
+            try
+            {
+                var url = BuildOpenApiUrl($"/open-apis/wiki/v2/spaces/get_node?token={token}");
+                var res = await _feiShuHttpApi.GetWikiNodeInfo(url);
+                return res?.Data?.Node;
+            }
+            catch (HttpRequestException ex)
+            {
+                var responseData = string.Empty;
+
+                if (ex.InnerException is ApiResponseStatusException statusException)
+                {
+                    var response = statusException.ResponseMessage;
+                    responseData = await response.Content.ReadAsStringAsync();
+                }
+
+                LogHelper.LogError($"根据Token获取知识库节点失败，Token:{token}，异常信息：{ex.Message}，响应信息：{responseData}");
+                throw;
+            }
+        }
+
+        public async Task<List<WikiNodeItemDto>> GetWikiSubTreeByToken(string rootToken)
+        {
+            if (string.IsNullOrWhiteSpace(rootToken))
+            {
+                return new List<WikiNodeItemDto>();
+            }
+
+            var rootNode = await GetWikiNodeInfo(rootToken);
+            if (rootNode == null)
+            {
+                return new List<WikiNodeItemDto>();
+            }
+
+            var result = new List<WikiNodeItemDto> { rootNode };
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<string>();
+            visited.Add(rootNode.NodeToken);
+            queue.Enqueue(rootNode.NodeToken);
+
+            while (queue.Any())
+            {
+                var parentNodeToken = queue.Dequeue();
+                string pageToken = null;
+                bool hasMore;
+
+                do
+                {
+                    var pagedResult = await GetWikiNodeList(rootNode.SpaceId, pageToken, parentNodeToken);
+                    var children = pagedResult?.Items ?? new List<WikiNodeItemDto>();
+                    foreach (var child in children)
+                    {
+                        if (string.IsNullOrWhiteSpace(child?.NodeToken) || !visited.Add(child.NodeToken))
+                        {
+                            continue;
+                        }
+
+                        result.Add(child);
+                        if (child.HasChild)
+                        {
+                            queue.Enqueue(child.NodeToken);
+                        }
+                    }
+
+                    pageToken = pagedResult?.PageToken;
+                    hasMore = pagedResult?.HasMore ?? false;
+                } while (hasMore && !string.IsNullOrWhiteSpace(pageToken));
+            }
+
+            return result;
+        }
+
         public async Task<List<WikiNodeItemDto>> GetWikiChildNode(string spaceId, string parentNodeToken)
         {
             List<WikiNodeItemDto> childNodes = new List<WikiNodeItemDto>();
@@ -227,7 +383,7 @@ namespace feishu_doc_export.HttpApi
         {
             try
             {
-                var result = await _feiShuHttpApi.DownLoadFile(fileToken);
+                var result = await _feiShuHttpApi.DownLoadFile(BuildOpenApiUrl($"/open-apis/drive/v1/files/{fileToken}/download"));
 
                 return result;
             }
@@ -244,7 +400,7 @@ namespace feishu_doc_export.HttpApi
 
             try
             {
-                var result = await _feiShuHttpApi.CreateExportTask(request);
+                var result = await _feiShuHttpApi.CreateExportTask(BuildOpenApiUrl("/open-apis/drive/v1/export_tasks"), request);
                 return result.Data;
             }
             catch (HttpRequestException ex) when (ex.InnerException is ApiResponseStatusException statusException)
@@ -268,11 +424,19 @@ namespace feishu_doc_export.HttpApi
         public async Task<ExportTaskResultDto> QueryExportTaskResult(string ticket, string token)
         {
             int status;// 0成功，1初始化，2处理中
+            const int maxPollCount = 600; // 600 * 300ms ~= 180s
 
             var data = new ExportTaskResultDto();
+            var pollCount = 0;
             do
             {
-                var result = await _feiShuHttpApi.QueryExportTask(ticket, token);
+                pollCount++;
+                if (pollCount > maxPollCount)
+                {
+                    throw new TimeoutException($"导出任务轮询超时，ticket={ticket} token={token}");
+                }
+
+                var result = await _feiShuHttpApi.QueryExportTask(BuildOpenApiUrl($"/open-apis/drive/v1/export_tasks/{ticket}?token={token}"));
 
                 status = result.Data.Result.JobStatus;
 
@@ -296,7 +460,7 @@ namespace feishu_doc_export.HttpApi
 
         public async Task<byte[]> DownLoad(string fileToken)
         {
-            var result = await _feiShuHttpApi.DownLoad(fileToken);
+            var result = await _feiShuHttpApi.DownLoad(BuildOpenApiUrl($"/open-apis/drive/v1/export_tasks/file/{fileToken}/download"));
 
             return result;
         }
@@ -308,7 +472,7 @@ namespace feishu_doc_export.HttpApi
         {
             try
             {
-                var res = await _feiShuHttpApi.GetWikiSpaces();
+                var res = await _feiShuHttpApi.GetWikiSpaces(BuildOpenApiUrl("/open-apis/wiki/v2/spaces"));
 
                 return res.Data;
             }
@@ -333,7 +497,7 @@ namespace feishu_doc_export.HttpApi
         {
             try
             {
-                var res = await _feiShuHttpApi.GetWikiSpaceInfo(spaceId);
+                var res = await _feiShuHttpApi.GetWikiSpaceInfo(BuildOpenApiUrl($"/open-apis/wiki/v2/spaces/{spaceId}"));
 
                 return res.Data;
             }
@@ -360,7 +524,7 @@ namespace feishu_doc_export.HttpApi
         {
             try
             {
-                var res = await _feiShuHttpApi.GetFolderMeta(folderToken);
+                var res = await _feiShuHttpApi.GetFolderMeta(BuildOpenApiUrl($"/open-apis/drive/explorer/v2/folder/{folderToken}/meta"));
 
                 return res.Data;
             }
@@ -381,9 +545,71 @@ namespace feishu_doc_export.HttpApi
             }
         }
 
+        public async Task<byte[]> DownLoadFileSilently(string fileToken)
+        {
+            var result = await _feiShuHttpApi.DownLoadFile(BuildOpenApiUrl($"/open-apis/drive/v1/files/{fileToken}/download"));
+            return result;
+        }
+
+        public async Task<byte[]> DownLoadMediaSilently(string fileToken)
+        {
+            var result = await _feiShuHttpApi.DownLoadMedia(BuildOpenApiUrl($"/open-apis/drive/v1/medias/{fileToken}/download"));
+            return result;
+        }
+
+        public async Task<byte[]> DownLoadAttachmentBestEffort(string fileToken)
+        {
+            try
+            {
+                return await DownLoadFileSilently(fileToken);
+            }
+            catch (HttpRequestException ex) when (ex.InnerException is ApiResponseStatusException statusException
+                && (statusException.ResponseMessage?.StatusCode == HttpStatusCode.Forbidden
+                    || statusException.ResponseMessage?.StatusCode == HttpStatusCode.NotFound))
+            {
+                return await DownLoadMediaSilently(fileToken);
+            }
+        }
+
+        public async Task<CloudDocDto> GetCloudDocMeta(string fileToken)
+        {
+            try
+            {
+                var res = await _feiShuHttpApi.GetCloudDocMeta(BuildOpenApiUrl($"/open-apis/drive/v1/files/{fileToken}"));
+                if (res?.Data == null)
+                {
+                    return null;
+                }
+
+                if (res.Data.File != null)
+                {
+                    if (string.IsNullOrWhiteSpace(res.Data.File.Token))
+                    {
+                        res.Data.File.Token = fileToken;
+                    }
+
+                    return res.Data.File;
+                }
+
+                return new CloudDocDto
+                {
+                    Token = string.IsNullOrWhiteSpace(res.Data.Token) ? fileToken : res.Data.Token,
+                    Name = res.Data.Name,
+                    ParentToken = res.Data.ParentToken,
+                    Type = res.Data.Type,
+                    Url = res.Data.Url,
+                    HasChild = res.Data.HasChild
+                };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         public async Task<PagedResult<CloudDocDto>> GetCloudDocList(string folderToken = null, string pageToken = null)
         {
-            StringBuilder urlBuilder = new StringBuilder($"{FeiShuConsts.OpenApiEndPoint}/open-apis/drive/v1/files?folder_token={folderToken}&page_size=50");// page_size=50
+            StringBuilder urlBuilder = new StringBuilder($"{OpenApiHost}/open-apis/drive/v1/files?folder_token={folderToken}&page_size=50");// page_size=50
             if (!string.IsNullOrWhiteSpace(pageToken))
             {
                 urlBuilder.Append($"&page_token={pageToken}");
@@ -396,30 +622,64 @@ namespace feishu_doc_export.HttpApi
 
         public async Task<List<CloudDocDto>> GetFolderAllCloudDoc(string folderToken)
         {
+            return await GetCloudDocTree(folderToken, false);
+        }
+
+        public async Task<List<CloudDocDto>> GetCloudDocTree(string rootToken, bool includeRoot = true)
+        {
             try
             {
-                List<CloudDocDto> nodes = new List<CloudDocDto>();
-                string pageToken = null;
-                bool hasMore;
-                do
-                {
-                    // 分页获取顶级节点，pageToken = null时为获取第一页
-                    var pagedResult = await GetCloudDocList(folderToken, pageToken);
-                    nodes.AddRange(pagedResult.Files);
+                var nodes = new List<CloudDocDto>();
+                var visitedItemTokens = new HashSet<string>();
+                var visitedParentTokens = new HashSet<string>();
 
-                    foreach (var item in pagedResult.Files)
+                if (includeRoot)
+                {
+                    var rootNode = await GetCloudDocMeta(rootToken);
+                    if (rootNode != null)
                     {
-                        if (item.Type == "folder")
+                        if (string.IsNullOrWhiteSpace(rootNode.Token))
                         {
-                            List<CloudDocDto> childNodes = await GetChildCloudDoc(item.Token);
-                            nodes.AddRange(childNodes);
+                            rootNode.Token = rootToken;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(rootNode.Name))
+                        {
+                            rootNode.Name = rootToken;
                         }
                     }
 
-                    pageToken = pagedResult.PageToken ?? pagedResult.NextPageToken;
-                    hasMore = pagedResult.HasMore;
+                    if (rootNode == null)
+                    {
+                        try
+                        {
+                            var folderMeta = await GetFolderMeta(rootToken);
+                            rootNode = new CloudDocDto
+                            {
+                                Token = rootToken,
+                                Name = folderMeta?.Name ?? rootToken,
+                                Type = "folder"
+                            };
+                        }
+                        catch
+                        {
+                            // ignore
+                        }
+                    }
 
-                } while (hasMore && !string.IsNullOrWhiteSpace(pageToken));
+                    if (rootNode != null && visitedItemTokens.Add(rootNode.Token))
+                    {
+                        nodes.Add(rootNode);
+                    }
+
+                    if (rootNode != null && !CanContainChildren(rootNode))
+                    {
+                        return nodes;
+                    }
+                }
+
+                List<CloudDocDto> childNodes = await GetChildCloudDoc(rootToken, visitedItemTokens, visitedParentTokens);
+                nodes.AddRange(childNodes);
 
                 return nodes;
 
@@ -443,29 +703,81 @@ namespace feishu_doc_export.HttpApi
 
         public async Task<List<CloudDocDto>> GetChildCloudDoc(string parentNodeToken)
         {
+            return await GetChildCloudDoc(parentNodeToken, new HashSet<string>(), new HashSet<string>());
+        }
+
+        private async Task<List<CloudDocDto>> GetChildCloudDoc(string parentNodeToken, HashSet<string> visitedItemTokens, HashSet<string> visitedParentTokens)
+        {
             List<CloudDocDto> childNodes = new List<CloudDocDto>();
+
+            if (!visitedParentTokens.Add(parentNodeToken))
+            {
+                return childNodes;
+            }
+
             string pageToken = null;
             bool hasMore;
             do
             {
-                var pagedResult = await GetCloudDocList(parentNodeToken, pageToken);
-                childNodes.AddRange(pagedResult.Files);
+                PagedResult<CloudDocDto> pagedResult;
+                try
+                {
+                    pagedResult = await GetCloudDocList(parentNodeToken, pageToken);
+                }
+                catch (Exception ex)
+                {
+                    LogHelper.LogWarn($"读取云文档子节点失败，父Token:{parentNodeToken}，错误:{ex.Message}");
+                    break;
+                }
+
+                if (pagedResult?.Files == null || !pagedResult.Files.Any())
+                {
+                    break;
+                }
 
                 foreach (var item in pagedResult.Files)
                 {
-                    if (item.Type == "folder")
+                    if (visitedItemTokens.Add(item.Token))
                     {
-                        List<CloudDocDto> grandChildNodes = await GetChildCloudDoc(item.Token);
+                        childNodes.Add(item);
+                    }
+                }
+
+                foreach (var item in pagedResult.Files)
+                {
+                    if (CanContainChildren(item))
+                    {
+                        List<CloudDocDto> grandChildNodes = await GetChildCloudDoc(item.Token, visitedItemTokens, visitedParentTokens);
                         childNodes.AddRange(grandChildNodes);
                     }
                 }
 
-                pageToken = pagedResult.PageToken;
+                pageToken = pagedResult.PageToken ?? pagedResult.NextPageToken;
                 hasMore = pagedResult.HasMore;
 
             } while (hasMore && !string.IsNullOrWhiteSpace(pageToken));
 
             return childNodes;
+        }
+
+        private static bool CanContainChildren(CloudDocDto item)
+        {
+            if (item == null)
+            {
+                return false;
+            }
+
+            if (string.Equals(item.Type, "file", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (item.HasChild)
+            {
+                return true;
+            }
+
+            return string.Equals(item.Type, "folder", StringComparison.OrdinalIgnoreCase);
         }
 
         #endregion

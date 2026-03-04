@@ -1,27 +1,16 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Text.Json.Serialization;
-using System.Threading.Tasks;
 
 namespace feishu_doc_export.Dtos
 {
     /// <summary>
-    /// 个人空间云文档
+    /// 云文档详情接口返回结构（兼容 data.file 与 data 直出两种形态）
     /// </summary>
-    public class CloudDocDto
+    public class CloudDocMetaData
     {
-        [JsonPropertyName("created_time")]
-        public string CreatedTime { get; set; }
-
-        [JsonPropertyName("modified_time")]
-        public string ModifiedTime { get; set; }
+        [JsonPropertyName("file")]
+        public CloudDocDto File { get; set; }
 
         public string Name { get; set; }
-
-        [JsonPropertyName("owner_id")]
-        public string OwnerId { get; set; }
 
         [JsonPropertyName("parent_token")]
         public string ParentToken { get; set; }

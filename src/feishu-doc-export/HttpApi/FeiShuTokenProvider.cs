@@ -26,16 +26,39 @@ namespace feishu_doc_export.HttpApi
 
         protected override async Task<TokenResult> RequestTokenAsync(IServiceProvider serviceProvider)
         {
-            var tokenResult = new TokenResult();
+            if (string.Equals(GlobalConfig.AuthMode, "user", StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildUserTokenResultFromConfig();
+            }
 
+            return await RequestTenantTokenAsync();
+        }
+
+        private async Task<TokenResult> RequestTenantTokenAsync()
+        {
             var requestData = RequestData.CreateAccessToken(GlobalConfig.AppId, GlobalConfig.AppSecret);
-            var result = await _feiShuHttpApi.GetTenantAccessToken(requestData);
+            var tokenUrl = FeiShuConsts.BuildOpenApiUrl("/open-apis/auth/v3/tenant_access_token/internal", GlobalConfig.Platform);
+            var result = await _feiShuHttpApi.GetTenantAccessToken(tokenUrl, requestData);
 
-            tokenResult.Access_token = result.TenantAccessToken;
-            tokenResult.Refresh_token = result.TenantAccessToken;
-            tokenResult.Expires_in = result.Expire;
+            return new TokenResult
+            {
+                Access_token = result.TenantAccessToken,
+                Refresh_token = result.TenantAccessToken,
+                Expires_in = result.Expire
+            };
+        }
 
-            return tokenResult;
+        private static TokenResult BuildUserTokenResultFromConfig()
+        {
+            // user模式默认直接使用命令行传入的user_access_token，避免影响现有tenant模式流程。
+            return new TokenResult
+            {
+                Access_token = GlobalConfig.UserAccessToken,
+                Refresh_token = string.IsNullOrWhiteSpace(GlobalConfig.UserRefreshToken)
+                    ? GlobalConfig.UserAccessToken
+                    : GlobalConfig.UserRefreshToken,
+                Expires_in = 86400
+            };
         }
     }
 }
